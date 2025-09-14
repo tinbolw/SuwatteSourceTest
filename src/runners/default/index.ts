@@ -23,9 +23,9 @@ export class Target
   {
     info: RunnerInfo = {
       name: "Suwayomi",
-      id: "com.template",
+      id: "app.suwayomi",
       version: 1,
-      thumbnail: "default.png",
+      thumbnail: "suwayomi.png",
       website: "https://github.com/Suwayomi/Suwayomi-Server",
       supportedLanguages: [],
   };
