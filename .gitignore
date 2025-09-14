@@ -1,2 +1,0 @@
-# node_modules persists when branch is switched in VS code due to being gitignored, quick fix to ignore it
-node_modules
