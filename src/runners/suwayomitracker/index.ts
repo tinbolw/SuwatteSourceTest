@@ -1,16 +1,27 @@
-import { 
+import {
   RunnerPreferenceProvider,
-  ContentTracker, 
-  Form, 
-  Highlight, 
+  ContentTracker,
+  Form,
+  Highlight,
+  ImageRequestHandler,
+  NetworkRequest,
+  RunnerAuthenticatable,
   RunnerInfo,
   TrackerConfig,
   TrackProgressUpdate,
   TrackStatus,
+  UIStepper,
   UITextField,
 } from "@suwatte/daisuke";
-import { GetMangaChaptersQuery, UpdateChapterMutation } from "./gql";
-import { genAuthHeader } from "./utils";
+
+import { UnreadChapterMutation, UpdateChapterMutation } from "./gql";
+import {
+  GetMangaChaptersQuery,
+  GetAllCategoriesQuery,
+  GetMangaQuery,
+} from "../suwayomi/gql"
+import { genAuthHeader } from "../suwayomi/utils";
+
 
 const info: RunnerInfo = {
   id: "tin.suwayomitracker",
@@ -24,7 +35,11 @@ const config: TrackerConfig = {
   linkKeys: ["suwayomi"],
 };
 
-export const Target: ContentTracker & RunnerPreferenceProvider = {
+export const Target:
+  ContentTracker &
+  RunnerPreferenceProvider &
+  ImageRequestHandler & 
+  RunnerAuthenticatable = {
   info,
   config,
 
@@ -42,7 +57,57 @@ export const Target: ContentTracker & RunnerPreferenceProvider = {
         },
         headers: {
           "authorization": `Basic ${genAuthHeader(
-            await ObjectStore.string("suwayomi_username"), 
+            await ObjectStore.string("suwayomi_username"),
+            await ObjectStore.string("suwayomi_password")
+          )}`,
+          "Content-Type": "application/json"
+        },
+      }
+    );
+
+    const chapters = await (JSON.parse(response.data)).data.manga.chapters.nodes;
+
+    const matches = chapters.filter((chapter: { chapterNumber: any; }) => chapter.chapterNumber == progress.chapter);
+
+    if (matches.length == 0) {
+      throw new Error("No chapter with that number found.");
+    } else {
+      await client.request(
+        {
+          url: apiUrl,
+          method: "POST",
+          body: {
+            "query": UpdateChapterMutation(matches[0].id),
+          },
+          headers: {
+            "authorization": `Basic ${genAuthHeader(
+              await ObjectStore.string("suwayomi_username"),
+              await ObjectStore.string("suwayomi_password")
+            )}`,
+            "Content-Type": "application/json"
+          },
+        }
+      );
+    }
+  },
+
+  async getResultsForTitles(titles: string[]): Promise<Highlight[]> {
+    const title = titles[0]; // api does not seem to support more than one title anyways
+
+    const client = new NetworkClient();
+    const baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
+    const apiUrl = baseUrl + "/api/graphql";
+
+    const response = await client.request(
+      {
+        url: apiUrl,
+        method: "POST",
+        body: {
+          "query": GetAllCategoriesQuery,
+        },
+        headers: {
+          "authorization": `Basic ${genAuthHeader(
+            await ObjectStore.string("suwayomi_username"),
             await ObjectStore.string("suwayomi_password")
           )}`,
           "Content-Type": "application/json"
@@ -51,51 +116,193 @@ export const Target: ContentTracker & RunnerPreferenceProvider = {
     );
 
     const parsedJson = await JSON.parse(response.data);
-    const chapterId = parsedJson.data.manga.chapter.nodes
-      .filter((chapter: { chapterNumber: number | undefined; }) => chapter.chapterNumber == progress.chapter)[0].id;
 
-    console.log(chapterId);
-
-    // await client.request(
-    //   {
-    //     url: apiUrl,
-    //     method: "POST",
-    //     body: {
-    //       "query": UpdateChapterMutation(parsedJson),
-    //     },
-    //     headers: {
-    //       "authorization": `Basic ${genAuthHeader(
-    //         await ObjectStore.string("suwayomi_username"), 
-    //         await ObjectStore.string("suwayomi_password")
-    //       )}`,
-    //       "Content-Type": "application/json"
-    //     },
-    //   }
-    // );
-  },
-
-  async getResultsForTitles(titles: string[]): Promise<Highlight[]> {
-    throw new Error();
+    return parsedJson.data.categories.nodes[0].mangas.nodes
+      .filter((manga: { title: string; }) => manga.title == title)
+      .map((manga: { thumbnailUrl: string; id: { toString: () => any; }; title: any; }) => {
+        const imageUrl = baseUrl + manga.thumbnailUrl;
+        return {
+          id: manga.id.toString(),
+          title: manga.title,
+          cover: imageUrl,
+        };
+      });
   },
 
   async getTrackItem(id: string): Promise<Highlight> {
-    throw new Error();
+    const client = new NetworkClient();
+    const baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
+    const apiUrl = baseUrl + "/api/graphql";
+
+    const response = await client.request(
+      {
+        url: apiUrl,
+        method: "POST",
+        body: {
+          "query": GetMangaQuery(id),
+        },
+        headers: {
+          "authorization": `Basic ${genAuthHeader(
+            await ObjectStore.string("suwayomi_username"),
+            await ObjectStore.string("suwayomi_password")
+          )}`,
+          "Content-Type": "application/json"
+        },
+      }
+    );
+
+    const manga = await (JSON.parse(response.data)).data.manga;
+
+    return {
+      id,
+      title: manga.title,
+      cover: baseUrl + manga.thumbnailUrl,
+      webUrl: `${baseUrl}/manga/${id}`,
+      entry: {
+        status: TrackStatus.COMPLETED, // ask about this
+        progress: {
+          maxAvailableChapter: manga.highestNumberedChapter.chapterNumber,
+          lastReadChapter: manga.latestReadChapter?.chapterNumber ?? 0,
+        }
+      }
+    }
   },
-  
+
   async didUpdateStatus(id: string, status: TrackStatus): Promise<void> {
-    throw new Error();
+    throw new Error("3");
   },
 
   async beginTracking(id: string, status: TrackStatus): Promise<void> {
-    throw new Error();
+    throw new Error("4");
   },
-    
+
   async getEntryForm(id: string): Promise<Form> {
-    throw new Error();
+    const client = new NetworkClient();
+    const baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
+    const apiUrl = baseUrl + "/api/graphql";
+
+    const response = await client.request(
+      {
+        url: apiUrl,
+        method: "POST",
+        body: {
+          "query": GetMangaQuery(id),
+        },
+        headers: {
+          "authorization": `Basic ${genAuthHeader(
+            await ObjectStore.string("suwayomi_username"),
+            await ObjectStore.string("suwayomi_password")
+          )}`,
+          "Content-Type": "application/json"
+        },
+      }
+    );
+
+    const manga = await (JSON.parse(response.data)).data.manga;
+
+    return {
+      sections: [
+        {
+          header: "Reading Progress",
+          children: [
+            UIStepper({
+              id: "progress",
+              title: "Chapter",
+              value: manga.latestReadChapter?.chapterNumber ?? 0,
+              upperBound: manga.highestNumberedChapter.chapterNumber,
+              allowDecimal: true,
+            }),
+          ]
+        }
+      ]
+    }
   },
-    
+
   async didSubmitEntryForm(id: string, form: any): Promise<void> {
-    throw new Error();
+    const client = new NetworkClient();
+    const baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
+    const apiUrl = baseUrl + "/api/graphql";
+
+    const response = await client.request(
+      {
+        url: apiUrl,
+        method: "POST",
+        body: {
+          "query": GetMangaChaptersQuery(id),
+        },
+        headers: {
+          "authorization": `Basic ${genAuthHeader(
+            await ObjectStore.string("suwayomi_username"),
+            await ObjectStore.string("suwayomi_password")
+          )}`,
+          "Content-Type": "application/json"
+        },
+      }
+    );
+
+    const chapters = await (JSON.parse(response.data)).data.manga.chapters.nodes;
+
+    const matches = chapters.filter((chapter: { chapterNumber: any; }) => chapter.chapterNumber == form.progress);
+    const laterChapters = chapters.filter((chapter: { chapterNumber: any; }) => chapter.chapterNumber > (form.progress ?? 0));
+
+    if (form.progress == 0) {
+      for (const chapter of laterChapters) {
+        await client.request(
+          {
+            url: apiUrl,
+            method: "POST",
+            body: {
+              "query": UnreadChapterMutation(chapter.id),
+            },
+            headers: {
+              "authorization": `Basic ${genAuthHeader(
+                await ObjectStore.string("suwayomi_username"),
+                await ObjectStore.string("suwayomi_password")
+              )}`,
+              "Content-Type": "application/json"
+            },
+          }
+        );
+      }
+    } else if (matches.length == 0) {
+      throw new Error("No chapter with that number found.");
+    } else {
+      await client.request(
+        {
+          url: apiUrl,
+          method: "POST",
+          body: {
+            "query": UpdateChapterMutation(matches[0].id),
+          },
+          headers: {
+            "authorization": `Basic ${genAuthHeader(
+              await ObjectStore.string("suwayomi_username"),
+              await ObjectStore.string("suwayomi_password")
+            )}`,
+            "Content-Type": "application/json"
+          },
+        }
+      );
+
+      for (const chapter of laterChapters) {
+        await client.request(
+          {
+            url: apiUrl,
+            method: "POST",
+            body: {
+              "query": UnreadChapterMutation(chapter.id),
+            },
+            headers: {
+              "authorization": `Basic ${genAuthHeader(
+                await ObjectStore.string("suwayomi_username"),
+                await ObjectStore.string("suwayomi_password")
+              )}`,
+              "Content-Type": "application/json"
+            },
+          }
+        );
+      }
+    }
   },
 
   async getPreferenceMenu(): Promise<Form> {
@@ -146,4 +353,31 @@ export const Target: ContentTracker & RunnerPreferenceProvider = {
       ],
     };
   },
+
+  async willRequestImage(imageURL: string): Promise<NetworkRequest> {
+    return {
+      url: imageURL,
+      method: "GET",
+      // body: {
+      //   "query": GetAllCategoriesQuery,
+      // },
+      headers: {
+        "authorization": `Basic ${genAuthHeader(
+          await ObjectStore.string("suwayomi_username"),
+          await ObjectStore.string("suwayomi_password")
+        )}`,
+        // "Content-Type": "application/json"
+      },
+    }
+  },
+
+  async getAuthenticatedUser() {
+    return {
+      handle: "placeholder",
+    }
+  },
+
+  async handleUserSignOut() {
+
+  }
 }

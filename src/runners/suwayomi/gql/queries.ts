@@ -25,6 +25,12 @@ export function GetMangaQuery(contentId: string) {
         status
         genre
         id
+        highestNumberedChapter {
+          chapterNumber
+        }
+        latestReadChapter {
+          chapterNumber
+        }
       }
     }
   `;
