@@ -3,6 +3,7 @@ import {
   Chapter,
   ChapterData,
   Content,
+  ContentProgressState,
   ContentSource,
   DirectoryConfig,
   DirectoryRequest,
@@ -11,11 +12,13 @@ import {
   NetworkRequest,
   PagedResult,
   PageLinkResolver,
+  ProgressSyncHandler,
   Property,
   RunnerInfo,
   RunnerPreferenceProvider,
   UIPicker,
   UITextField,
+  UIToggle,
 } from "@suwatte/daisuke";
 
 import { 
@@ -276,6 +279,59 @@ export class Target
           )}`,
           // "Content-Type": "application/json"
         },
+      }
+    }
+
+    
+
+    async getProgressState(contentId: string): Promise<ContentProgressState> {
+      if (await ObjectStore.boolean("suwayomi_track")) {
+        const response = await this.client.request(
+          {
+            url: this.apiUrl,
+            method: "POST",
+            body: {
+              "query": GetMangaChaptersQuery(contentId),
+            },
+            headers: {
+              "authorization": `Basic ${genAuthHeader(
+                await ObjectStore.string("suwayomi_username"),
+                await ObjectStore.string("suwayomi_password")
+              )}`,
+              "Content-Type": "application/json"
+            },
+          }
+        );
+
+        const parsedJson = JSON.parse(response.data);
+
+        if (!parsedJson || !parsedJson.length) {
+          return {};
+        }
+
+        const readChapterIds = parsedJson.data.manga.chapters.nodes
+          .filter((chapter: { isRead: boolean; }) => chapter.isRead === true)
+          .map((chapter: { id: number; }) => chapter.id.toString());
+          
+        const latestUnreadChapters = parsedJson.data.manga.chapters.nodes
+          .filter((chapter: { isRead: boolean; }) => chapter.isRead === false);
+
+        if (latestUnreadChapters.length == 0) return {readChapterIds};
+
+        return {
+          readChapterIds,
+          currentReadingState: {
+            chapterId: latestUnreadChapters[0].id,
+            page: latestUnreadChapters[0].lastPageRead,
+            readDate: new Date(latestUnreadChapters[0].lastReadAt),
+            progress:
+              Math.round(
+                (latestUnreadChapters[0].lastPageRead / latestUnreadChapters[0].pageCount) * 100
+              ) / 100,
+          }
+        }
+      } else {
+        return {};
       }
     }
 }

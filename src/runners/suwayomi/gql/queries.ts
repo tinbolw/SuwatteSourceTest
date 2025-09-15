@@ -38,6 +38,10 @@ export function GetMangaChaptersQuery(contentId: string) {
           nodes {
             name
             id
+            isRead
+            lastPageRead
+            lastReadAt
+            pageCount
             chapterNumber
             url
             uploadDate
