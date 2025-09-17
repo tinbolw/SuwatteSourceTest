@@ -1,27 +1,11 @@
-export function UpdateChapterMutation(chapterId: string) {
+export function UpdateChaptersMutation(chapterIds: string[], isRead: boolean) {
   return `
-    mutation UpdateChapter {
-      updateChapter(input: {id: ${chapterId}, patch: {
-        isRead: true
-      }}) {
-        chapter {
+    mutation UpdateChapters {
+      updateChapters(input: {ids: [${chapterIds.toString()}] patch:{isRead:${isRead}}}) {
+        chapters {
           isRead
         }
       }
     }
-  `
-}
-
-export function UnreadChapterMutation(chapterId: string) {
-  return `
-    mutation UpdateChapter {
-      updateChapter(input: {id: ${chapterId}, patch: {
-        isRead: false
-      }}) {
-        chapter {
-          isRead
-        }
-      }
-    }
-  `
+  `;
 }

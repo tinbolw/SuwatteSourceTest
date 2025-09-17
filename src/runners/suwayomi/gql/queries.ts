@@ -1,23 +1,24 @@
-export const GetAllCategoriesQuery = `
+export function GetAllMangaQuery(search: string | undefined | null) {
+  return `
   query AllCategories {
-    categories {
+    mangas(filter: {title: {includesInsensitive: "${search ?? ""}"} inLibrary:{equalTo:true}}) {
       nodes {
-        mangas {
-          nodes {
-            id
-            title
-            thumbnailUrl
-          }
-        }
+        id
+        title
+        thumbnailUrl
       }
     }
   }
-`;
+  `;
+}
 
 export function GetMangaQuery(contentId: string) {
   return `
     query GetManga {
       manga(id: ${contentId}) {
+        source {
+          displayName
+        }
         title
         thumbnailUrl
         description
@@ -45,9 +46,6 @@ export function GetMangaChaptersQuery(contentId: string) {
             name
             id
             isRead
-            lastPageRead
-            lastReadAt
-            pageCount
             chapterNumber
             url
             uploadDate
@@ -61,4 +59,15 @@ export function GetMangaChaptersQuery(contentId: string) {
       }
     }
   `;
+}
+
+/* Technically a mutation, but the only place where you can fetch the actual chapter pages */
+export function GetChapterPagesQuery(chapterId: string) {
+  return `
+    mutation GetChapterPages {
+      fetchChapterPages(input: {chapterId: ${chapterId}}) {
+        pages
+      }
+    }
+  `
 }

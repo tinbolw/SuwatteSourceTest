@@ -1,3 +1,5 @@
+import { PublicationStatus } from "@suwatte/daisuke";
+
 /**
  * Generates the credentials portion of an HTTP Basic Authorization header.
  * @param username 
@@ -12,19 +14,41 @@ export function genAuthHeader(username: string | null, password: string | null) 
   }
 }
 
-export function matchMangaStatus(status: string) : number | undefined {
+/**
+ * Matches the manga statuses provided by the Suwayomi API to those used by Suwatte.
+ * @param {("UNKNOWN" | "ONGOING" | "COMPLETED" | "LICENSED" | "PUBLISHING_FINISHED" | "CANCELLED" | "ON_HIATUS")} status
+ * @returns 
+ */
+export function matchMangaStatus(status: string) : PublicationStatus | undefined {
   switch (status) {
     case "ONGOING":
     case "LICENSED":
-      return 1;
+      return PublicationStatus.ONGOING;
     case "COMPLETED":
     case "PUBLISHING_FINISHED":
-      return 2;
+      return PublicationStatus.COMPLETED;
     case "CANCELLED":
-      return 3;
+      return PublicationStatus.CANCELLED;
     case "ON_HIATUS":
-      return 4;
+      return PublicationStatus.HIATUS;
     default:
       return undefined;
   }
+}
+
+export async function graphqlPost(apiUrl: string, client: NetworkClient, query: string,
+  username: string | null, password: string | null) {
+  const response = await client.post(apiUrl,
+    {
+      body: {
+        "query": query,
+      },
+      headers: {
+        "authorization": `Basic ${genAuthHeader(username, password)}`,
+        "Content-Type": "application/json"
+      },
+    }
+  );
+
+  return JSON.parse(response.data).data;
 }

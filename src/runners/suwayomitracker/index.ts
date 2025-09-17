@@ -14,18 +14,16 @@ import {
   UITextField,
 } from "@suwatte/daisuke";
 
-import { UnreadChapterMutation, UpdateChapterMutation } from "./gql";
-import {
-  GetMangaChaptersQuery,
-  GetAllCategoriesQuery,
-  GetMangaQuery,
-} from "../suwayomi/gql"
-import { genAuthHeader } from "../suwayomi/utils";
+import { GetAllMangasResponse, GetMangaResponse, GetMangaChaptersResponse } from "../suwayomi/types";
+import { GetAllMangaQuery, GetMangaChaptersQuery, GetMangaQuery } from "../suwayomi/gql"
+import { genAuthHeader, graphqlPost } from "../suwayomi/utils";
 
+import { UpdateChaptersMutation } from "./gql";
+import { getApiUrl } from "./utils";
 
 const info: RunnerInfo = {
   id: "tin.suwayomitracker",
-  name: "Suwayomi Tracker",
+  name: "Suwayomi",
   version: 0.1,
   website: "https://github.com/Suwayomi/Suwayomi-Server",
   thumbnail: "suwayomi.png",
@@ -45,160 +43,80 @@ export const Target:
 
   async didUpdateLastReadChapter(id: string, progress: TrackProgressUpdate): Promise<void> {
     const client = new NetworkClient();
-    const baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
-    const apiUrl = baseUrl + "/api/graphql";
+    const apiUrl = await getApiUrl();
+    const username = await ObjectStore.string("suwayomi_username");
+    const password = await ObjectStore.string("suwayomi_password");
 
-    const response = await client.request(
-      {
-        url: apiUrl,
-        method: "POST",
-        body: {
-          "query": GetMangaChaptersQuery(id),
-        },
-        headers: {
-          "authorization": `Basic ${genAuthHeader(
-            await ObjectStore.string("suwayomi_username"),
-            await ObjectStore.string("suwayomi_password")
-          )}`,
-          "Content-Type": "application/json"
-        },
-      }
-    );
+    const response: GetMangaChaptersResponse = await graphqlPost(apiUrl, client,
+      GetMangaChaptersQuery(id), username, password);
 
-    const chapters = await (JSON.parse(response.data)).data.manga.chapters.nodes;
-
-    const matches = chapters.filter((chapter: { chapterNumber: any; }) => chapter.chapterNumber == progress.chapter);
+    // api implementation of filtering chapters is broken, manual solution
+    const matches = response.manga.chapters.nodes // find the chapter and those before it
+      .filter((chapter: { chapterNumber: any; }) => chapter.chapterNumber <= (progress.chapter ?? 0))
+      .map((chapter) => chapter.id);
 
     if (matches.length == 0) {
       throw new Error("No chapter with that number found.");
     } else {
-      await client.request(
-        {
-          url: apiUrl,
-          method: "POST",
-          body: {
-            "query": UpdateChapterMutation(matches[0].id),
-          },
-          headers: {
-            "authorization": `Basic ${genAuthHeader(
-              await ObjectStore.string("suwayomi_username"),
-              await ObjectStore.string("suwayomi_password")
-            )}`,
-            "Content-Type": "application/json"
-          },
-        }
-      );
+      await graphqlPost(apiUrl, client, UpdateChaptersMutation(matches, true),
+      username, password);
     }
   },
 
   async getResultsForTitles(titles: string[]): Promise<Highlight[]> {
-    const title = titles[0]; // api does not seem to support more than one title anyways
+    const title = titles[0]; // api does not seem to support more than one title
 
-    const client = new NetworkClient();
     const baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
     const apiUrl = baseUrl + "/api/graphql";
 
-    const response = await client.request(
-      {
-        url: apiUrl,
-        method: "POST",
-        body: {
-          "query": GetAllCategoriesQuery,
-        },
-        headers: {
-          "authorization": `Basic ${genAuthHeader(
-            await ObjectStore.string("suwayomi_username"),
-            await ObjectStore.string("suwayomi_password")
-          )}`,
-          "Content-Type": "application/json"
-        },
-      }
-    );
+    const response: GetAllMangasResponse = await graphqlPost(apiUrl, new NetworkClient(),
+      GetAllMangaQuery(title), await ObjectStore.string("suwayomi_username"), await ObjectStore.string("suwayomi_password"));
 
-    const parsedJson = await JSON.parse(response.data);
+    const manga = response.mangas.nodes[0];
 
-    return parsedJson.data.categories.nodes[0].mangas.nodes
-      .filter((manga: { title: string; }) => manga.title == title)
-      .map((manga: { thumbnailUrl: string; id: { toString: () => any; }; title: any; }) => {
-        const imageUrl = baseUrl + manga.thumbnailUrl;
-        return {
-          id: manga.id.toString(),
-          title: manga.title,
-          cover: imageUrl,
-        };
-      });
+    return [{
+      id: manga.id.toString(),
+      title: manga.title,
+      cover: baseUrl + manga.thumbnailUrl,
+    }];
   },
 
   async getTrackItem(id: string): Promise<Highlight> {
-    const client = new NetworkClient();
     const baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
     const apiUrl = baseUrl + "/api/graphql";
 
-    const response = await client.request(
-      {
-        url: apiUrl,
-        method: "POST",
-        body: {
-          "query": GetMangaQuery(id),
-        },
-        headers: {
-          "authorization": `Basic ${genAuthHeader(
-            await ObjectStore.string("suwayomi_username"),
-            await ObjectStore.string("suwayomi_password")
-          )}`,
-          "Content-Type": "application/json"
-        },
-      }
-    );
-
-    const manga = await (JSON.parse(response.data)).data.manga;
+    const response: GetMangaResponse = await graphqlPost(apiUrl, new NetworkClient(),
+      GetMangaQuery(id), await ObjectStore.string("suwayomi_username"), await ObjectStore.string("suwayomi_password"));
 
     return {
       id,
-      title: manga.title,
-      cover: baseUrl + manga.thumbnailUrl,
+      title: response.manga.title,
+      cover: baseUrl + response.manga.thumbnailUrl,
       webUrl: `${baseUrl}/manga/${id}`,
       entry: {
-        status: TrackStatus.COMPLETED, // ask about this
+        status: TrackStatus.COMPLETED, // one that works
         progress: {
-          maxAvailableChapter: manga.highestNumberedChapter.chapterNumber,
-          lastReadChapter: manga.latestReadChapter?.chapterNumber ?? 0,
+          maxAvailableChapter: response.manga.highestNumberedChapter.chapterNumber,
+          lastReadChapter: response.manga.latestReadChapter?.chapterNumber ?? 0,
         }
       }
     }
   },
 
   async didUpdateStatus(id: string, status: TrackStatus): Promise<void> {
-    throw new Error("3");
+    throw new Error("Suwayomi does not support reading statuses.");
   },
 
+  // doesn't seem like this is ever called
   async beginTracking(id: string, status: TrackStatus): Promise<void> {
-    throw new Error("4");
+    throw new Error("Not implemented");
   },
 
   async getEntryForm(id: string): Promise<Form> {
-    const client = new NetworkClient();
-    const baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
-    const apiUrl = baseUrl + "/api/graphql";
+    const response: GetMangaResponse = await graphqlPost(await getApiUrl(), new NetworkClient(),
+      GetMangaQuery(id), await ObjectStore.string("suwayomi_username"), await ObjectStore.string("suwayomi_password"));
 
-    const response = await client.request(
-      {
-        url: apiUrl,
-        method: "POST",
-        body: {
-          "query": GetMangaQuery(id),
-        },
-        headers: {
-          "authorization": `Basic ${genAuthHeader(
-            await ObjectStore.string("suwayomi_username"),
-            await ObjectStore.string("suwayomi_password")
-          )}`,
-          "Content-Type": "application/json"
-        },
-      }
-    );
-
-    const manga = await (JSON.parse(response.data)).data.manga;
+    const manga = response.manga;
 
     return {
       sections: [
@@ -220,89 +138,26 @@ export const Target:
 
   async didSubmitEntryForm(id: string, form: any): Promise<void> {
     const client = new NetworkClient();
-    const baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
-    const apiUrl = baseUrl + "/api/graphql";
+    const username = await ObjectStore.string("suwayomi_username");
+    const password = await ObjectStore.string("suwayomi_password");
+    const apiUrl = await getApiUrl();
 
-    const response = await client.request(
-      {
-        url: apiUrl,
-        method: "POST",
-        body: {
-          "query": GetMangaChaptersQuery(id),
-        },
-        headers: {
-          "authorization": `Basic ${genAuthHeader(
-            await ObjectStore.string("suwayomi_username"),
-            await ObjectStore.string("suwayomi_password")
-          )}`,
-          "Content-Type": "application/json"
-        },
-      }
-    );
+    const response: GetMangaChaptersResponse = await graphqlPost(apiUrl, client,
+      GetMangaChaptersQuery(id), await ObjectStore.string("suwayomi_username"), await ObjectStore.string("suwayomi_password"));
 
-    const chapters = await (JSON.parse(response.data)).data.manga.chapters.nodes;
+    const chapters = response.manga.chapters.nodes;
 
-    const matches = chapters.filter((chapter: { chapterNumber: any; }) => chapter.chapterNumber == form.progress);
-    const laterChapters = chapters.filter((chapter: { chapterNumber: any; }) => chapter.chapterNumber > (form.progress ?? 0));
+    const matches = chapters.filter((chapter: { chapterNumber: any; }) => chapter.chapterNumber <= form.progress)
+      .map((chapter) => chapter.id);
+    const laterChapterIds = chapters.filter((chapter: { chapterNumber: any; }) => chapter.chapterNumber > (form.progress ?? 0))
+      .map((chapter) => chapter.id);
 
-    if (form.progress == 0) {
-      for (const chapter of laterChapters) {
-        await client.request(
-          {
-            url: apiUrl,
-            method: "POST",
-            body: {
-              "query": UnreadChapterMutation(chapter.id),
-            },
-            headers: {
-              "authorization": `Basic ${genAuthHeader(
-                await ObjectStore.string("suwayomi_username"),
-                await ObjectStore.string("suwayomi_password")
-              )}`,
-              "Content-Type": "application/json"
-            },
-          }
-        );
-      }
-    } else if (matches.length == 0) {
+    if (matches.length == 0 && form.progress != 0) {
       throw new Error("No chapter with that number found.");
     } else {
-      await client.request(
-        {
-          url: apiUrl,
-          method: "POST",
-          body: {
-            "query": UpdateChapterMutation(matches[0].id),
-          },
-          headers: {
-            "authorization": `Basic ${genAuthHeader(
-              await ObjectStore.string("suwayomi_username"),
-              await ObjectStore.string("suwayomi_password")
-            )}`,
-            "Content-Type": "application/json"
-          },
-        }
-      );
-
-      for (const chapter of laterChapters) {
-        await client.request(
-          {
-            url: apiUrl,
-            method: "POST",
-            body: {
-              "query": UnreadChapterMutation(chapter.id),
-            },
-            headers: {
-              "authorization": `Basic ${genAuthHeader(
-                await ObjectStore.string("suwayomi_username"),
-                await ObjectStore.string("suwayomi_password")
-              )}`,
-              "Content-Type": "application/json"
-            },
-          }
-        );
-      }
+      await graphqlPost(apiUrl, client, UpdateChaptersMutation(matches, true), username, password);
     }
+    await graphqlPost(apiUrl, client, UpdateChaptersMutation(laterChapterIds, false), username, password);
   },
 
   async getPreferenceMenu(): Promise<Form> {
@@ -359,7 +214,7 @@ export const Target:
       url: imageURL,
       method: "GET",
       // body: {
-      //   "query": GetAllCategoriesQuery,
+      //   "query": GetAllMangaQuery,
       // },
       headers: {
         "authorization": `Basic ${genAuthHeader(
@@ -371,6 +226,7 @@ export const Target:
     }
   },
 
+  // placeholder methods to allow Suwatte to sync from Suwayomi, neither are supported
   async getAuthenticatedUser() {
     return {
       handle: "placeholder",
