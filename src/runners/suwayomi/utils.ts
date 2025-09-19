@@ -1,4 +1,5 @@
 import { PublicationStatus } from "@suwatte/daisuke";
+import { UserPreferences } from "./types";
 
 /**
  * Generates the credentials portion of an HTTP Basic Authorization header.
@@ -51,4 +52,33 @@ export async function graphqlPost(apiUrl: string, client: NetworkClient, query: 
   );
 
   return JSON.parse(response.data).data;
+}
+
+/**
+ * Returns the base URL of the Suwayomi server, or localhost if one is not defined.
+ * @returns 
+ */
+export async function getBaseUrl() : Promise<string> {
+  return await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
+}
+
+/**
+ * Gets the API url of the Suwayomi server, or localhost if one is not defined.
+ * @returns 
+ */
+export async function getApiUrl() : Promise<string> {
+  return await getBaseUrl() + "/api/graphql";
+}
+
+/**
+ * Return the user preferences.
+ * @returns 
+ */
+export async function getPreferences() : Promise<UserPreferences> {
+  return {
+    baseUrl: await getBaseUrl(),
+    apiUrl: await getApiUrl(),
+    username: await ObjectStore.string("suwayomi_username") ?? "",
+    password: await ObjectStore.string("suwayomi_password") ?? "",
+  }
 }

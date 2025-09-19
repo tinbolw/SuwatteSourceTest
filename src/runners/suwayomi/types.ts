@@ -56,3 +56,10 @@ export type GetChapterPagesResponse = {
     pages: string[]
   }
 }
+
+export type UserPreferences = {
+  baseUrl: string,
+  apiUrl: string,
+  username: string,
+  password: string,
+}

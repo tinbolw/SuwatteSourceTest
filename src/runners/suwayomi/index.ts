@@ -11,8 +11,10 @@ import {
   NetworkRequest,
   PagedResult,
   Property,
+  RunnerAuthenticatable,
   RunnerInfo,
   RunnerPreferenceProvider,
+  SourceConfig,
   UITextField,
 } from "@suwatte/daisuke";
 
@@ -20,14 +22,17 @@ import { GetAllMangaQuery, GetMangaQuery, GetMangaChaptersQuery, GetChapterPages
 
 import { GetAllMangasResponse, GetChapterPagesResponse, GetMangaChaptersResponse, GetMangaResponse } from "./types";
 
-import { genAuthHeader, graphqlPost, matchMangaStatus } from "./utils";
-// import qs from 'querystring';
+import { genAuthHeader, graphqlPost, matchMangaStatus, getBaseUrl, getPreferences } from "./utils";
+
+
 
 export class Target
   implements
   ContentSource,
   ImageRequestHandler, 
-  RunnerPreferenceProvider {
+  RunnerPreferenceProvider,
+  RunnerAuthenticatable {
+
   info: RunnerInfo = {
     id: "tin.suwayomi",
     name: "Suwayomi",
@@ -37,24 +42,41 @@ export class Target
     supportedLanguages: ["UNIVERSAL"],
     rating: CatalogRating.SAFE,
   };
+  
+  config: SourceConfig = {};
 
-  baseUrl = "";
-  apiUrl = "";
   client = new NetworkClient();
 
-  async getDirectory(request: DirectoryRequest): Promise<PagedResult> {
-    // loading suwayomi server URL here and when getting manga at getContent() to refresh if it is changed in config
-    // those seem to be the two starting points of other api requests
-    this.baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
-    this.apiUrl = this.baseUrl + "/api/graphql";
+  // Override the placeholder URL
+  async onEnvironmentLoaded(): Promise<void> {
+    this.config = {
+      cloudflareResolutionURL: await getBaseUrl(),
+    };
+  }
 
-    const response: GetAllMangasResponse = await graphqlPost(this.apiUrl, this.client, GetAllMangaQuery(request.query), 
-      await ObjectStore.string("suwayomi_username"), await ObjectStore.string("suwayomi_password"));
+  async willRequestImage(imageURL: string): Promise<NetworkRequest> {
+    return {
+      url: imageURL,
+      method: "GET",
+      headers: {
+        "authorization": `Basic ${genAuthHeader(
+          await ObjectStore.string("suwayomi_username"), 
+          await ObjectStore.string("suwayomi_password")
+        )}`,
+      },
+    }
+  }
+
+  async getDirectory(request: DirectoryRequest): Promise<PagedResult> {
+    const { baseUrl, apiUrl, username, password } = await getPreferences();
+
+    const response: GetAllMangasResponse = await graphqlPost(apiUrl, this.client,
+      GetAllMangaQuery(request.query), username, password);
 
     const highlights = response.mangas.nodes
-      .map((manga: { id: number; title: string; thumbnailUrl: string; }) => {
+      .map((manga) => {
         // thumbnailUrl is relative to the Suwayomi server URL
-        const imageUrl = this.baseUrl + manga.thumbnailUrl;
+        const imageUrl = baseUrl + manga.thumbnailUrl;
         return {
           id: manga.id.toString(),
           title: manga.title,
@@ -73,11 +95,10 @@ export class Target
   }
 
   async getContent(contentId: string): Promise<Content> {
-    this.baseUrl = await ObjectStore.string("suwayomi_url") ?? "http://127.0.0.1:4567";
-    this.apiUrl = this.baseUrl + "/api/graphql";
+    const { baseUrl, apiUrl, username, password } = await getPreferences();
 
-    const response: GetMangaResponse = await graphqlPost(this.apiUrl, this.client, GetMangaQuery(contentId), 
-      await ObjectStore.string("suwayomi_username"), await ObjectStore.string("suwayomi_password")) ;
+    const response: GetMangaResponse = await graphqlPost(apiUrl, this.client,
+      GetMangaQuery(contentId), username, password) ;
 
     const manga = response.manga;
 
@@ -103,8 +124,8 @@ export class Target
 
     return {
       title: manga.title,
-      cover: this.baseUrl + manga.thumbnailUrl,
-      webUrl: `${this.baseUrl}/manga/${manga.id}`, // api seems to provide wrong local url
+      cover: baseUrl + manga.thumbnailUrl,
+      webUrl: `${baseUrl}/manga/${manga.id}`, // api seems to provide wrong local url
       status: matchMangaStatus(manga.status),
       creators: manga.author.split(", "),
       summary: manga.description,
@@ -113,13 +134,14 @@ export class Target
   }
 
   async getChapters(contentId: string): Promise<Chapter[]> {
+    const { baseUrl, apiUrl, username, password } = await getPreferences();
 
-    const response: GetMangaChaptersResponse = await graphqlPost(this.apiUrl, this.client, GetMangaChaptersQuery(contentId), 
-      await ObjectStore.string("suwayomi_username"), await ObjectStore.string("suwayomi_password")) ;
+    const response: GetMangaChaptersResponse = await graphqlPost(apiUrl, this.client,
+      GetMangaChaptersQuery(contentId), username, password) ;
 
     const chapters: Chapter[] = [];
 
-    response.manga.chapters.nodes.reverse(); // order latest first
+    response.manga.chapters.nodes.reverse(); // order: latest first
 
     for (let chapterIndex = 0; chapterIndex < response.manga.chapters.nodes.length; chapterIndex++) {
       const chapter = response.manga.chapters.nodes[chapterIndex];
@@ -128,11 +150,10 @@ export class Target
           chapterId: chapter.id.toString(),
           number: chapter.chapterNumber,
           index: chapterIndex,
-          // webUrl: `${this.baseUrl}/manga/${parsedJson.data.manga.id}/chapter/${chapterIndex}`,
           date: new Date(parseInt(chapter.uploadDate)),
           language: response.manga.source.lang, // api does not provide language on a per-chapter basis
           title: chapter.name,
-          providers: [{ id: chapter.scanlator, name: chapter.scanlator }],
+          providers: [{ id: chapter.scanlator || "UNKNOWN", name: chapter.scanlator || "UNKNOWN"}],
         }
       )
     }
@@ -141,13 +162,15 @@ export class Target
   }
 
   async getChapterData(contentId: string, chapterId: string): Promise<ChapterData> {
-    const response: GetChapterPagesResponse = await graphqlPost(this.apiUrl, this.client, GetChapterPagesQuery(chapterId), 
-      await ObjectStore.string("suwayomi_username"), await ObjectStore.string("suwayomi_password")) ;
+    const { baseUrl, apiUrl, username, password } = await getPreferences();
+
+    const response: GetChapterPagesResponse = await graphqlPost(apiUrl, this.client,
+      GetChapterPagesQuery(chapterId), username, password) ;
 
     return {
       pages: response.fetchChapterPages.pages.map((entry: string) => {
         return {
-          url: this.baseUrl + entry,
+          url: baseUrl + entry,
         };
       })
     }
@@ -203,17 +226,13 @@ export class Target
     };
   }
 
-  // required for suwayomi authentication
-  async willRequestImage(imageURL: string): Promise<NetworkRequest> {
+  async getAuthenticatedUser() {
     return {
-      url: imageURL,
-      method: "GET",
-      headers: {
-        "authorization": `Basic ${genAuthHeader(
-          await ObjectStore.string("suwayomi_username"), 
-          await ObjectStore.string("suwayomi_password")
-        )}`,
-      },
+      handle: "placeholder",
     }
+  }
+
+  async handleUserSignOut() {
+
   }
 }
