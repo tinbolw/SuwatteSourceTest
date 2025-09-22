@@ -102,6 +102,7 @@ exports.Target = void 0;
 const daisuke_1 = require("@suwatte/daisuke");
 const gql_1 = require("./gql");
 const utils_1 = require("./utils");
+// import { getCookie } from "./auth";
 class Target {
     info = {
         id: "tin.suwayomi",
@@ -131,6 +132,8 @@ class Target {
     }
     async getDirectory(request) {
         const { baseUrl, apiUrl, username, password } = await (0, utils_1.getPreferences)();
+        // const result = await getCookie(baseUrl, username, password);
+        // console.log(result);
         const response = await (0, utils_1.graphqlPost)(apiUrl, this.client, (0, gql_1.GetAllMangaQuery)(request.query), username, password);
         const highlights = response.mangas.nodes
             .map((manga) => {
