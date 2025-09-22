@@ -24,7 +24,7 @@ import { GetAllMangasResponse, GetChapterPagesResponse, GetMangaChaptersResponse
 
 import { genAuthHeader, graphqlPost, matchMangaStatus, getBaseUrl, getPreferences } from "./utils";
 
-
+// import { getCookie } from "./auth";
 
 export class Target
   implements
@@ -69,6 +69,9 @@ export class Target
 
   async getDirectory(request: DirectoryRequest): Promise<PagedResult> {
     const { baseUrl, apiUrl, username, password } = await getPreferences();
+
+    // const result = await getCookie(baseUrl, username, password);
+    // console.log(result);
 
     const response: GetAllMangasResponse = await graphqlPost(apiUrl, this.client,
       GetAllMangaQuery(request.query), username, password);
